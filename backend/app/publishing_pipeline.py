@@ -132,6 +132,69 @@ JUDGE_SYSTEM = """你是一位独立内容评审。请对两个候选做成对�
 每项0-10分。可信度是硬门槛：出现无证据数据、夸大效果或把推断当事实，credibility 不得超过4。不要偏好先出现的候选。"""
 
 
+REVISION_SYSTEM = """你是资深中文内容编辑。请基于评审反馈，只修改内容稿中影响清晰度和可执行性的问题，保留原有的结构和角度。
+
+修改原则：
+1. 只改评审指出的薄弱维度（clarity 低 → 让观点更聚焦、表述更直白；actionability 低 → 补充可复用启示、操作建议）
+2. 不改变 candidate_id、concept_name、editorial_angle 和整体编辑角度
+3. 不引入无证据的效果描述、夸大承诺或 AI 套话
+4. 输出与原稿完全相同的 JSON 结构
+
+输出严格 JSON（结构与原候选稿完全一致）。"""
+
+
+async def _revise_candidate(
+    candidate: dict[str, Any],
+    winner_id: str,
+    clarity_score: float,
+    actionability_score: float,
+    judge_reason: str,
+) -> dict[str, Any] | None:
+    """Revise candidate when clarity or actionability < 7. Returns revised candidate or None on failure."""
+    weak_dims = []
+    if clarity_score < 7:
+        weak_dims.append(f"清晰度({clarity_score:.0f}/10)：需要让观点更聚焦、表述更直白")
+    if actionability_score < 7:
+        weak_dims.append(f"可执行性({actionability_score:.0f}/10)：需要补充可复用启示和操作建议")
+
+    if not weak_dims:
+        return None
+
+    revision_prompt = (
+        f"待优化候选（{winner_id}）：\n{json.dumps(candidate, ensure_ascii=False, indent=2)}\n\n"
+        f"评审反馈：{judge_reason}\n\n"
+        f"需改善的维度：\n" + "\n".join(f"  - {d}" for d in weak_dims) + "\n\n"
+        "请针对上述薄弱维度修改稿件，保持 JSON 结构不变。"
+    )
+
+    result = await chat_completion(
+        system=REVISION_SYSTEM,
+        user=revision_prompt,
+        max_tokens=8192,
+        response_format={"type": "json_object"},
+    )
+    if isinstance(result, dict) and _valid_output(result):
+        return result
+    return None
+
+
+def _winner_judge_scores(
+    winner_id: str, forward: dict[str, Any], reverse: dict[str, Any]
+) -> dict[str, float]:
+    """Aggregate judge scores for the winner across forward and reverse, taking the minimum."""
+    scores = {}
+    for key in ("clarity", "actionability", "credibility", "novelty", "platform_fit"):
+        vals = []
+        for judging in (forward, reverse):
+            judging_scores = (judging.get("scores") or {}) if isinstance(judging, dict) else {}
+            candidate_scores = judging_scores.get(winner_id, {}) if isinstance(judging_scores, dict) else {}
+            v = candidate_scores.get(key)
+            if isinstance(v, (int, float)):
+                vals.append(float(v))
+        scores[key] = min(vals) if vals else 0.0
+    return scores
+
+
 async def generate_publishing_output(ad: dict, analysis: dict) -> dict[str, Any]:
     if is_configured():
         context = _publication_context(ad, analysis)
@@ -149,8 +212,9 @@ async def generate_publishing_output(ad: dict, analysis: dict) -> dict[str, Any]
             forward = await _judge_candidates(candidates)
             reverse = await _judge_candidates(list(reversed(candidates)))
             selected = dict(_select_candidate(candidates, forward, reverse))
+            winner_id = selected.get("candidate_id", "A")
             selected["_editorial_meta"] = {
-                "selected_candidate": selected.get("candidate_id", "A"),
+                "selected_candidate": winner_id,
                 "concept_name": selected.get("concept_name", ""),
                 "editorial_angle": selected.get("editorial_angle", ""),
                 "forward_winner": forward.get("winner"),
@@ -180,6 +244,31 @@ async def generate_publishing_output(ad: dict, analysis: dict) -> dict[str, Any]
                             "selection_method": "position_balanced_with_slop_fallback",
                         }
                         return alt
+
+                # Auto-revision: if winner's clarity or actionability < 7, revise once
+                judge_scores = _winner_judge_scores(winner_id, forward, reverse)
+                clarity = judge_scores.get("clarity", 0)
+                actionability = judge_scores.get("actionability", 0)
+                selected["_editorial_meta"]["judge_scores"] = judge_scores
+
+                if clarity < 7 or actionability < 7:
+                    judge_reason = (
+                        forward.get("reason") or reverse.get("reason") or ""
+                    )
+                    revised = await _revise_candidate(
+                        selected, winner_id, clarity, actionability, judge_reason
+                    )
+                    selected["_editorial_meta"]["revision"] = {
+                        "attempted": True,
+                        "succeeded": revised is not None,
+                        "pre_revision_clarity": clarity,
+                        "pre_revision_actionability": actionability,
+                        "judge_reason": judge_reason[:200],
+                    }
+                    if revised:
+                        revised["_editorial_meta"] = selected["_editorial_meta"]
+                        return revised
+
                 return selected
 
     return _fallback_output(ad, analysis)

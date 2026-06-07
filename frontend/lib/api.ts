@@ -64,6 +64,51 @@ export async function listAds(limit = 20, offset = 0): Promise<{ total: number; 
   return res.json();
 }
 
+// Calibration API
+
+export interface ExpertScoreRequest {
+  ad_id: string;
+  expert_id: string;
+  overall_score: number;
+  hook_score: number;
+  messaging_score: number;
+  conversion_score: number;
+  emotion_score: number;
+  trust_score: number;
+  production_score: number;
+  innovation_score: number;
+  notes?: string;
+}
+
+export interface CalibrationReport {
+  n_ads: number;
+  n_experts: number;
+  overall_spearman_rho: number | null;
+  overall_p_value: number | null;
+  per_dimension: Array<{ dimension: string; label: string; spearman_rho: number | null; p_value: number | null; n_pairs: number; ai_mean: number; expert_mean: number; correlation_label: string }>;
+  expert_reliability: Record<string, number | null>;
+  tier_agreement: number | null;
+  created_at: string;
+}
+
+export async function submitExpertScore(data: ExpertScoreRequest): Promise<void> {
+  const res = await fetch(`${BASE_URL}/calibration/scores`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) });
+  if (!res.ok) { const err = await res.json().catch(() => ({})); throw new Error(err.detail || '提交失败'); }
+}
+
+export async function listExpertScores(expertId?: string): Promise<{ scores: any[]; count: number }> {
+  const params = expertId ? `?expert_id=${expertId}` : '';
+  const res = await fetch(`${BASE_URL}/calibration/scores${params}`);
+  if (!res.ok) throw new Error('获取失败');
+  return res.json();
+}
+
+export async function fetchCalibrationReport(): Promise<CalibrationReport> {
+  const res = await fetch(`${BASE_URL}/calibration/report`);
+  if (!res.ok) throw new Error('获取报告失败');
+  return res.json();
+}
+
 export async function getAd(id: string): Promise<AdDetail> {
   const res = await fetch(`${BASE_URL}/ads/${id}`);
   if (!res.ok) throw new Error('获取详情失败');
@@ -176,4 +221,52 @@ export async function confirmJobMetadata(
 export async function retryJob(id: string): Promise<void> {
   const res = await fetch(`${BASE_URL}/jobs/${id}/retry`, { method: 'POST' });
   if (!res.ok) throw new Error('重试失败');
+}
+
+export interface SearchResult extends AdSummary {
+  _score: number;
+}
+
+export interface CompareResponse {
+  ad_a: CompareSide;
+  ad_b: CompareSide;
+  predicted_winner: string;
+  confidence: string;
+  key_differences: string[];
+  analysis_markdown: string;
+  hook_comparison: string;
+  audience_comparison: string;
+  trust_comparison: string;
+}
+
+export interface CompareSide {
+  ad_id: string;
+  brand_name: string;
+  product_name: string;
+  platform: string;
+  industry: string;
+  overall_score: number;
+  tier: string;
+  strengths: string[];
+  weaknesses: string[];
+}
+
+export async function compareAds(adIdA: string, adIdB: string): Promise<CompareResponse> {
+  const res = await fetch(`${BASE_URL}/compare`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ ad_id_a: adIdA, ad_id_b: adIdB }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail || '对比失败');
+  }
+  return res.json();
+}
+
+export async function searchAds(query: string, topK = 20): Promise<{ items: SearchResult[]; total: number; query: string }> {
+  const params = new URLSearchParams({ q: query, top_k: String(topK) });
+  const res = await fetch(`${BASE_URL}/ads/search?${params}`);
+  if (!res.ok) throw new Error('搜索失败');
+  return res.json();
 }

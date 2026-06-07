@@ -19,6 +19,9 @@ from ..schemas import (
     AdCreateResponse,
     AdDetail,
     AdSummary,
+    CompareRequest,
+    CompareResponse,
+    ComparisonDetail,
     ErrorResponse,
     HealthResponse,
     JobCreateRequest,
@@ -30,6 +33,7 @@ from ..schemas import (
     MediaAnalyzeResponse,
 )
 from ..share_text import ShareTextError, extract_supported_url
+from ..swipe_index import search as semantic_search
 from ..workflow import continue_job, run_job
 
 import sys
@@ -305,6 +309,107 @@ async def list_ads(
         )
 
     return {"total": total, "limit": limit, "offset": offset, "items": [item.model_dump() for item in items]}
+
+
+# ── Semantic search ───────────────────────────────────
+
+@router.get("/ads/search")
+async def search_ads(
+    q: str = Query(default="", min_length=1),
+    top_k: int = Query(default=20, ge=1, le=50),
+    db=Depends(get_db),
+):
+    """Semantic search over completed ads using sentence-transformers embeddings + FAISS."""
+    results = await semantic_search(q, top_k)
+    if not results:
+        return {"items": [], "total": 0, "query": q}
+
+    id_set = ", ".join(f"'{r['id']}'" for r in results)
+    score_by_id = {r["id"]: r["score"] for r in results}
+
+    cursor = await db.execute(
+        f"""SELECT id, brand_name, product_name, industry, platform, status, created_at, analysis_json
+            FROM ads WHERE id IN ({id_set})"""
+    )
+    rows = await cursor.fetchall()
+
+    items = []
+    for row in rows:
+        takeaway = None
+        if row["analysis_json"]:
+            try:
+                analysis = json.loads(row["analysis_json"])
+                takeaway = (analysis.get("final_note") or {}).get("one_sentence_takeaway")
+            except (json.JSONDecodeError, TypeError):
+                pass
+        item = AdSummary(
+            id=row["id"],
+            brand_name=row["brand_name"],
+            product_name=row["product_name"],
+            industry=row["industry"],
+            platform=row["platform"],
+            status=row["status"],
+            created_at=row["created_at"],
+            one_sentence_takeaway=takeaway,
+        ).model_dump()
+        item["_score"] = score_by_id.get(row["id"], 0.0)
+        items.append(item)
+
+    items.sort(key=lambda x: x["_score"], reverse=True)
+    return {"items": items, "total": len(items), "query": q}
+
+
+# ── Creative A/B comparison ────────────────────────────
+
+from ..comparison_engine import run_comparison
+
+
+@router.post("/compare", response_model=CompareResponse)
+async def compare_ads(req: CompareRequest, db=Depends(get_db)):
+    """Compare two completed ads side-by-side with LLM-powered prediction."""
+    if req.ad_id_a == req.ad_id_b:
+        raise HTTPException(400, "不能对比同一条广告")
+
+    rows = []
+    for ad_id in (req.ad_id_a, req.ad_id_b):
+        cursor = await db.execute("SELECT * FROM ads WHERE id = ?", (ad_id,))
+        row = await cursor.fetchone()
+        if not row:
+            raise HTTPException(404, f"广告 {ad_id} 不存在")
+        if row["status"] != "completed":
+            raise HTTPException(400, f"广告 {ad_id} 尚未分析完成")
+        rows.append(dict(row))
+
+    comparison = await run_comparison(rows[0], rows[1])
+
+    def _build_detail(row: dict, prefix: str) -> ComparisonDetail:
+        scoring = {}
+        analysis_json = json.loads(row["analysis_json"]) if row["analysis_json"] else {}
+        scoring_blob = (analysis_json.get("scoring") or {}) if isinstance(analysis_json, dict) else {}
+        scoring = scoring_blob.get("scoring", scoring_blob) if isinstance(scoring_blob, dict) else {}
+        return ComparisonDetail(
+            ad_id=row["id"],
+            brand_name=row["brand_name"],
+            product_name=row["product_name"] or "",
+            platform=row["platform"],
+            industry=row["industry"],
+            overall_score=int(scoring.get("overall_score", 0)) if isinstance(scoring, dict) else 0,
+            tier=str(scoring.get("tier", "")) if isinstance(scoring, dict) else "",
+            strengths=comparison.get(f"ad_{prefix}_strengths", []),
+            weaknesses=comparison.get(f"ad_{prefix}_weaknesses", []),
+        )
+
+    return CompareResponse(
+        ad_a=_build_detail(rows[0], "a"),
+        ad_b=_build_detail(rows[1], "b"),
+        predicted_winner=comparison.get("predicted_winner", "tie"),
+        confidence=comparison.get("confidence", "low"),
+        key_differences=comparison.get("key_differences", []),
+        analysis_markdown=comparison.get("analysis_markdown", ""),
+        hook_comparison=comparison.get("hook_comparison", ""),
+        audience_comparison=comparison.get("audience_comparison", ""),
+        trust_comparison=comparison.get("trust_comparison", ""),
+    )
 
 
 # ── Get ad detail ───────────────────────────────────────

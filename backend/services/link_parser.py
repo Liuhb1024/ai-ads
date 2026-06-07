@@ -92,6 +92,20 @@ def _extract_json_blocks(html: str, key_field: str = "aweme_id") -> list[dict]:
     return results
 
 
+async def _fetch_page(url: str, timeout: int = 30) -> tuple[str, str]:
+    """Fetch page HTML with mobile UA. Returns (html, final_url)."""
+    async with httpx.AsyncClient(timeout=httpx.Timeout(timeout), follow_redirects=True) as client:
+        resp = await client.get(
+            url,
+            headers={
+                "User-Agent": MOBILE_UA,
+                "Accept": "text/html,application/xhtml+xml",
+                "Accept-Language": "zh-CN,zh;q=0.9",
+            },
+        )
+        return resp.text, str(resp.url) if hasattr(resp, 'url') else url
+
+
 async def _parse_douyin(url: str) -> ParseResult:
     """Parse douyin short link by resolving redirect and extracting embedded JSON."""
     result = ParseResult(url=url, platform="抖音")
@@ -157,15 +171,221 @@ async def _parse_douyin(url: str) -> ParseResult:
         return result
 
 
+async def _parse_xiaohongshu(url: str) -> ParseResult:
+    """Parse xiaohongshu share link by extracting __INITIAL_STATE__ JSON."""
+    result = ParseResult(url=url, platform="小红书")
+
+    try:
+        html, final_url = await _fetch_page(url)
+
+        # Try to extract note ID from URL
+        note_id = ""
+        for pat in [r'/explore/(\w+)', r'/discovery/item/(\w+)', r'/note/(\w+)']:
+            m = re.search(pat, final_url)
+            if m:
+                note_id = m.group(1)
+                break
+
+        # Extract __INITIAL_STATE__ JSON
+        # Extract __INITIAL_STATE__ JSON using brace counting
+        state_json = None
+        for marker in ("window.__INITIAL_STATE__=", "__INITIAL_STATE__="):
+            idx = html.find(marker)
+            if idx == -1:
+                continue
+            start = html.find("{", idx)
+            if start == -1:
+                continue
+            depth = 0
+            for i in range(start, len(html)):
+                ch = html[i]
+                if ch == "{":
+                    depth += 1
+                elif ch == "}":
+                    depth -= 1
+                    if depth == 0:
+                        raw = html[start : i + 1].replace("undefined", "null")
+                        try:
+                            state_json = json.loads(raw)
+                        except json.JSONDecodeError:
+                            pass
+                        break
+            if state_json is not None:
+                break
+
+        if state_json is not None:
+            note_detail_map = state_json.get("note", {}).get("noteDetailMap", {})
+            if isinstance(note_detail_map, dict):
+                if not note_id:
+                    note_id = next(iter(note_detail_map), "")
+                note_data = note_detail_map.get(note_id, {})
+                note = note_data.get("note", note_data)
+
+                if isinstance(note, dict):
+                    result.title = note.get("title", "") or note.get("displayTitle", "") or note.get("desc", "")
+                    result.description = note.get("desc", "") or note.get("title", "")
+
+                    user = note.get("user", {})
+                    if isinstance(user, dict):
+                        result.author = user.get("nickname", "") or user.get("nickName", "")
+
+                    image_list = note.get("imageList", [])
+                    if isinstance(image_list, list) and image_list:
+                        img = image_list[0]
+                        result.thumbnail_url = (
+                            img.get("url", "") if isinstance(img, dict) else ""
+                        )
+
+                    result.raw_metadata["note_id"] = note_id
+                    result.raw_metadata["type"] = note.get("type", "")
+                    result.raw_metadata["note_detail"] = note
+                    result.parsed = True
+                    return result
+
+        # Fallback: meta tags
+        title_match = re.search(r'<meta\s+property="og:title"\s+content="([^"]*)"', html)
+        if title_match:
+            result.title = title_match.group(1)
+        img_match = re.search(r'<meta\s+property="og:image"\s+content="([^"]*)"', html)
+        if img_match:
+            result.thumbnail_url = img_match.group(1)
+        author_match = re.search(r'<meta\s+name="author"\s+content="([^"]*)"', html)
+        if author_match:
+            result.author = author_match.group(1)
+
+        result.raw_metadata["note_id"] = note_id
+        result.parsed = bool(result.title or result.author)
+
+        return result
+    except httpx.TimeoutException:
+        result.error = "请求超时"
+        return result
+    except Exception as exc:
+        result.error = f"解析失败: {str(exc)}"
+        return result
+
+
+async def _parse_kuaishou(url: str) -> ParseResult:
+    """Parse kuaishou share link by extracting embedded JSON data."""
+    result = ParseResult(url=url, platform="快手")
+
+    try:
+        html, final_url = await _fetch_page(url)
+
+        # Try multiple key fields for json block extraction
+        blocks = _extract_json_blocks(html, "photoId")
+        if not blocks:
+            blocks = _extract_json_blocks(html, "videoId")
+        if not blocks:
+            blocks = _extract_json_blocks(html, "photo_id")
+        if not blocks:
+            blocks = _extract_json_blocks(html, "video_id")
+
+        if blocks:
+            data = max(blocks, key=lambda b: len(b))
+            result.title = data.get("caption", "") or data.get("desc", "") or data.get("title", "")
+            result.description = result.title
+            author = data.get("authorName", "") or data.get("author_name", "")
+            if isinstance(data.get("author"), dict):
+                author = data["author"].get("name", author)
+            result.author = author
+            result.thumbnail_url = data.get("coverUrl", "") or data.get("cover_url", "") or data.get("thumbnailUrl", "")
+            result.raw_metadata["photo_id"] = data.get("photoId", "") or data.get("photo_id", "")
+            result.raw_metadata["full_data"] = data
+            result.parsed = bool(result.title)
+            return result
+
+        # Fallback: meta tags
+        for pat in [r'<meta\s+property="og:title"\s+content="([^"]*)"', r'<meta\s+name="title"\s+content="([^"]*)"']:
+            m = re.search(pat, html)
+            if m:
+                result.title = m.group(1)
+                break
+        img_match = re.search(r'<meta\s+property="og:image"\s+content="([^"]*)"', html)
+        if img_match:
+            result.thumbnail_url = img_match.group(1)
+        result.parsed = bool(result.title)
+        return result
+    except httpx.TimeoutException:
+        result.error = "请求超时"
+        return result
+    except Exception as exc:
+        result.error = f"解析失败: {str(exc)}"
+        return result
+
+
+async def _parse_shipinhao(url: str) -> ParseResult:
+    """Best-effort parse of weixin channels / shipinhao page."""
+    result = ParseResult(url=url, platform="视频号")
+
+    try:
+        html, final_url = await _fetch_page(url)
+
+        # Try meta tags first
+        title = ""
+        for pat in [r'<meta\s+property="og:title"\s+content="([^"]*)"',
+                     r'<meta\s+name="twitter:title"\s+content="([^"]*)"',
+                     r'<title>([^<]*)</title>']:
+            m = re.search(pat, html)
+            if m:
+                title = m.group(1).strip()
+                if title:
+                    break
+        result.title = title
+
+        img_match = re.search(r'<meta\s+property="og:image"\s+content="([^"]*)"', html)
+        if img_match:
+            result.thumbnail_url = img_match.group(1)
+
+        desc_match = re.search(r'<meta\s+property="og:description"\s+content="([^"]*)"', html)
+        if desc_match:
+            result.description = desc_match.group(1)
+
+        # Try JSON blocks
+        blocks = _extract_json_blocks(html, "finder_object")
+        if not blocks:
+            blocks = _extract_json_blocks(html, "finder")
+        if blocks:
+            data = max(blocks, key=lambda b: len(b))
+            result.raw_metadata["finder_data"] = data
+            if not result.title:
+                result.title = data.get("description", "") or data.get("title", "")
+            if not result.author:
+                contact = data.get("contact", {})
+                if isinstance(contact, dict):
+                    result.author = contact.get("nickname", "") or contact.get("displayName", "")
+            if not result.thumbnail_url:
+                result.thumbnail_url = data.get("coverUrl", "") or data.get("cover_url", "")
+
+        result.raw_metadata["final_url"] = final_url
+        result.parsed = bool(result.title)
+        return result
+    except httpx.TimeoutException:
+        result.error = "请求超时"
+        return result
+    except Exception as exc:
+        result.error = f"解析失败: {str(exc)}"
+        return result
+
+
 async def parse_link(url: str) -> ParseResult:
     """Parse a video/share link and return structured metadata."""
     platform = detect_platform(url)
 
-    # Handle douyin links natively (bypasses yt-dlp cookie requirement)
+    # Dispatch to native parsers
     if platform == "抖音":
         return await _parse_douyin(url)
+    if platform == "小红书":
+        return await _parse_xiaohongshu(url)
+    if platform == "快手":
+        return await _parse_kuaishou(url)
+    if platform == "视频号":
+        result = await _parse_shipinhao(url)
+        if result.parsed:
+            return result
+        # shipinhao native parsing is unreliable; fall through to yt-dlp
 
-    # Fallback: use yt-dlp for other platforms
+    # Fallback: use yt-dlp for other platforms and failed native attempts
     result = ParseResult(url=url, platform=platform)
 
     try:

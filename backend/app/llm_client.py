@@ -23,6 +23,8 @@ TIMEOUT = int(_env("LLM_TIMEOUT", "120"))
 MAX_RETRIES = int(_env("LLM_MAX_RETRIES", "1"))
 TEMPERATURE = float(_env("LLM_TEMPERATURE", "0.7"))
 MAX_TOKENS = int(_env("LLM_MAX_TOKENS", "4096"))
+RETRY_DELAY = float(_env("LLM_RETRY_DELAY", "1.0"))
+TIMEOUT_RETRY_DELAY = float(_env("LLM_TIMEOUT_RETRY_DELAY", "2.0"))
 
 
 def is_configured() -> bool:
@@ -234,7 +236,7 @@ async def _call_api(
                 if resp.status_code != 200:
                     last_error = f"HTTP {resp.status_code}: {resp.text[:300]}"
                     if attempt < MAX_RETRIES:
-                        await asyncio.sleep(1.0 * (attempt + 1))
+                        await asyncio.sleep(RETRY_DELAY * (attempt + 1))
                         continue
                     return {"_error": last_error}
 
@@ -253,13 +255,13 @@ async def _call_api(
         except httpx.TimeoutException:
             last_error = f"Request timed out after {TIMEOUT}s"
             if attempt < MAX_RETRIES:
-                await asyncio.sleep(2.0)
+                await asyncio.sleep(TIMEOUT_RETRY_DELAY)
                 continue
             return {"_error": last_error}
         except Exception as exc:
             last_error = str(exc)
             if attempt < MAX_RETRIES:
-                await asyncio.sleep(1.0)
+                await asyncio.sleep(RETRY_DELAY)
                 continue
             return {"_error": last_error}
 

@@ -1,8 +1,8 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useRef } from 'react';
 import Link from 'next/link';
-import { listAds, AdSummary } from '@/lib/api';
+import { listAds, searchAds, AdSummary } from '@/lib/api';
 
 const STATUS_MAP: Record<string, { label: string; className: string }> = {
   completed: { label: '已完成', className: 'bg-emerald-50 text-emerald-700' },
@@ -16,15 +16,42 @@ const PLATFORM_FILTERS = ['全部', '抖音', '小红书', '视频号', '快手'
 
 export default function SwipeFilePage() {
   const [ads, setAds] = useState<AdSummary[]>([]);
+  const [searchResults, setSearchResults] = useState<AdSummary[] | null>(null);
   const [loading, setLoading] = useState(true);
+  const [searching, setSearching] = useState(false);
   const [error, setError] = useState('');
   const [industryFilter, setIndustryFilter] = useState('全部');
   const [platformFilter, setPlatformFilter] = useState('全部');
   const [searchQuery, setSearchQuery] = useState('');
+  const searchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
     loadAds();
   }, []);
+
+  // Semantic search with debounce
+  useEffect(() => {
+    if (!searchQuery.trim()) {
+      setSearchResults(null);
+      return;
+    }
+    if (searchTimer.current) clearTimeout(searchTimer.current);
+    searchTimer.current = setTimeout(async () => {
+      setSearching(true);
+      try {
+        const data = await searchAds(searchQuery.trim(), 50);
+        setSearchResults(data.items);
+      } catch {
+        // fall back to client-side filtering on error
+        setSearchResults(null);
+      } finally {
+        setSearching(false);
+      }
+    }, 300);
+    return () => {
+      if (searchTimer.current) clearTimeout(searchTimer.current);
+    };
+  }, [searchQuery]);
 
   const loadAds = async () => {
     setLoading(true);
@@ -38,17 +65,12 @@ export default function SwipeFilePage() {
     }
   };
 
-  const filtered = ads.filter((ad) => {
+  const sourceAds = searchResults ?? ads;
+  const isLoading = loading || searching;
+
+  const filtered = sourceAds.filter((ad) => {
     if (industryFilter !== '全部' && ad.industry !== industryFilter) return false;
     if (platformFilter !== '全部' && ad.platform !== platformFilter) return false;
-    if (searchQuery) {
-      const q = searchQuery.toLowerCase();
-      const haystack = [ad.brand_name, ad.product_name, ad.one_sentence_takeaway, ad.industry]
-        .filter(Boolean)
-        .join(' ')
-        .toLowerCase();
-      if (!haystack.includes(q)) return false;
-    }
     return true;
   });
 
@@ -98,7 +120,7 @@ export default function SwipeFilePage() {
         </div>
       </div>
 
-      {loading && (
+      {isLoading && (
         <div className="space-y-3">
           {[1, 2, 3].map((i) => (
             <div key={i} className="animate-pulse rounded-xl border border-stone-200 bg-white p-5">
@@ -115,7 +137,7 @@ export default function SwipeFilePage() {
         </div>
       )}
 
-      {!loading && !error && completedAds.length === 0 && (
+      {!isLoading && !error && completedAds.length === 0 && (
         <div className="py-20 text-center">
           <p className="mb-4 text-sm text-stone-400">
             {ads.length === 0 ? '暂无广告记录' : '没有符合条件的广告'}
@@ -129,7 +151,7 @@ export default function SwipeFilePage() {
         </div>
       )}
 
-      {!loading && completedAds.length > 0 && (
+      {!isLoading && completedAds.length > 0 && (
         <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
           {completedAds.map((ad) => {
             const badge = STATUS_MAP[ad.status] || STATUS_MAP.pending;
@@ -172,7 +194,7 @@ export default function SwipeFilePage() {
         </div>
       )}
 
-      {!loading && completedAds.length > 0 && (
+      {!isLoading && completedAds.length > 0 && (
         <p className="mt-6 text-center text-xs text-stone-400">
           共 {completedAds.length} 条（过滤后）
         </p>

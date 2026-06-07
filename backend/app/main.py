@@ -10,6 +10,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from .database import init_db
 from .routers.ads import router as ads_router
+from .routers.calibration import router as calibration_router
 
 
 @asynccontextmanager
@@ -34,6 +35,7 @@ app.add_middleware(
 )
 
 app.include_router(ads_router)
+app.include_router(calibration_router)
 
 
 @app.get("/")

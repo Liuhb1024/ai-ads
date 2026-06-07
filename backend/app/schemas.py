@@ -163,6 +163,35 @@ class JobCreateRequest(BaseModel):
     share_text: str = Field(..., min_length=1, max_length=10000)
 
 
+class CompareRequest(BaseModel):
+    ad_id_a: str = Field(..., min_length=1)
+    ad_id_b: str = Field(..., min_length=1)
+
+
+class ComparisonDetail(BaseModel):
+    ad_id: str
+    brand_name: str
+    product_name: str = ""
+    platform: str = ""
+    industry: str = ""
+    overall_score: int = 0
+    tier: str = ""
+    strengths: list[str] = []
+    weaknesses: list[str] = []
+
+
+class CompareResponse(BaseModel):
+    ad_a: ComparisonDetail
+    ad_b: ComparisonDetail
+    predicted_winner: str  # "A" | "B" | "tie"
+    confidence: str
+    key_differences: list[str]
+    analysis_markdown: str
+    hook_comparison: str
+    audience_comparison: str
+    trust_comparison: str
+
+
 class MetadataConfirmationRequest(BaseModel):
     brand_name: Optional[str] = Field(default=None, max_length=100)
     product_name: Optional[str] = Field(default=None, max_length=200)

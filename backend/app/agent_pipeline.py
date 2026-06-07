@@ -82,8 +82,8 @@ AGENT1_VIDEO_SYSTEM = """你是一位严谨的广告视频证据分析师。你�
 
 分析要点：
 1. 每条事实先进入 evidence_ledger，使用时间戳定位，最多保留20条最关键证据
-2. observation 只能写可看到、可听到或可读到的内容，不写“效果很好”“用户喜欢”等推测
-3. 无法确认品牌、价格、销量或功效时写“信息不足”，禁止补全
+2. observation 只能写可看到、可听到或可读到的内容，不写"效果很好""用户喜欢"等推测
+3. 无法确认品牌、价格、销量或功效时写"信息不足"，禁止补全
 4. quote 尽量保留原始口播或屏幕文字，不得虚构
 5. product_summary 等总结必须由 evidence_ledger 支撑
 6. 用中文输出，保持专业、克制、可审计"""
@@ -318,7 +318,7 @@ AGENT4_SYSTEM = """你是一位消费趋势与平台生态分析师。基于广�
 2. 分析平台生态：该平台对该品类的流量分配处于什么阶段
 3. 社会情绪分析：广告借势了什么时代情绪
 4. 时机判断：是否在大促/季节性节点投放
-5. 未联网、未提供外部数据时，禁止声称“当前热点”“近期爆发”“平台正在扶持”
+5. 未联网、未提供外部数据时，禁止声称"当前热点""近期爆发""平台正在扶持"
 6. 只能描述长期内容规律，并明确时效性限制
 7. 每条 claims 必须引用素材证据或标记低置信度
 8. 用中文输出"""
@@ -345,7 +345,7 @@ AUDITOR_SYSTEM = """你是一位独立事实审查编辑。你的职责是质疑
 审查规则：
 1. observed 必须被证据直接支持；inferred/hypothesis 必须明确使用判断性措辞
 2. 不允许从一条广告推断真实销量、转化率、投放规模或消费者普遍态度
-3. 不允许把未经联网验证的趋势称为“当前热点”
+3. 不允许把未经联网验证的趋势称为"当前热点"
 4. 推断不是错误：只要引用的证据能支撑其观察前提、claim_type 标注正确且没有冒充确定事实，应放入 approved_claim_ids
 5. 无法验证推断的真实效果属于 limitations，不应仅因缺少转化数据就判定该推断 unsupported
 6. 只有证据编号无效、引入不存在的事实、措辞越过 claim_type，才放入 unsupported_claim_ids
@@ -360,26 +360,19 @@ AUDITOR_SYSTEM = """你是一位独立事实审查编辑。你的职责是质疑
 
 AGENT5_SYSTEM = """你是一位顶级广告创意总监，撰写深刻的广告洞察笔记。
 
-基于各 Agent 的分析结果，输出以下 JSON（markdown_content 先留空字符串，稍后单独生成）：
+基于各 Agent 的分析结果，输出以下 JSON：
 
 {
   "title": "[广告洞察] 品牌 - 产品",
   "one_sentence_takeaway": "一句话核心洞察（锋利、好记、能复述）",
-  "tags": ["广告洞察", "行业", "品牌", "平台"],
-  "fact_check_summary": {
-    "observed_facts": ["素材中明确出现的事实，3-5条"],
-    "user_provided_context": ["用户补充的信息"],
-    "model_inference": ["模型推理的部分"],
-    "uncertainty": ["不确定的部分"]
-  }
+  "tags": ["广告洞察", "行业", "品牌", "平台"]
 }
 
 要求：
 1. 一句话带走要锋利、好记，让人看完能复述
-2. fact_check_summary 要诚实区分事实和推理
-3. 不得使用“让用户停留”“降低试错”“促成下单”“带来转化”等未经效果数据验证的因果表达
-4. 对创意意图使用“试图”“意在”“我的判断是”，对视频原话使用“素材宣称”
-5. 用中文输出"""
+2. 不得使用"让用户停留""降低试错""促成下单""带来转化"等未经效果数据验证的因果表达
+3. 对创意意图使用"试图""意在""我的判断是"，对视频原话使用"素材宣称"
+4. 用中文输出"""
 
 
 # ═══════════════════════════════════════════════════════════
@@ -721,7 +714,7 @@ async def run_agent_pipeline(
     )
     logger.info("Agent 7 done: %s", "OK" if _ok(a5a) else f"ERROR: {a5a.get('_error', 'JSON parse failed')}")
 
-    # Combine
+    # Combine — note: markdown_content is filled later by workflow/reporting
     note = a5a if _ok(a5a) else {}
     note["markdown_content"] = ""
     if not _ok(a5a):
@@ -732,17 +725,11 @@ async def run_agent_pipeline(
         item["claim"] for item in safe_claims
         if item.get("claim_type") in {"inferred", "hypothesis"}
     ]
-    fact_summary = note.get("fact_check_summary")
-    if not isinstance(fact_summary, dict):
-        fact_summary = {}
-    fact_summary.update(
-        {
-            "observed_facts": observed_facts,
-            "model_inference": model_inference,
-            "uncertainty": audit["limitations"] + audit["unsupported_claims"],
-        }
-    )
-    note["fact_check_summary"] = fact_summary
+    note["fact_check_summary"] = {
+        "observed_facts": observed_facts,
+        "model_inference": model_inference,
+        "uncertainty": audit["limitations"] + audit["unsupported_claims"],
+    }
 
     return {
         "material_understanding": a1,
@@ -753,9 +740,9 @@ async def run_agent_pipeline(
         "scoring": a6,
         "final_note": note,
         "observed_facts": observed_facts,
-        "user_provided_context": note.get("fact_check_summary", {}).get("user_provided_context", []),
+        "user_provided_context": [],
         "model_inference": model_inference,
-        "uncertainty": fact_summary["uncertainty"],
+        "uncertainty": note["fact_check_summary"]["uncertainty"],
         "analysis_meta": {
             "video_model": DOUBAO_MODEL,
             "source_mode": source_mode,
