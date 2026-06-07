@@ -1,0 +1,28 @@
+# Progress
+
+- 2026-06-07: Read README, PRD, architecture, API, database, LLM configuration, and task documents.
+- 2026-06-07: Identified version drift across documentation.
+- 2026-06-07: Began source-level verification.
+- 2026-06-07: Traced frontend URL parsing, ad creation, analysis, result display, export, history, and Swipe File flows.
+- 2026-06-07: Confirmed media analysis exists as a standalone endpoint but is not connected to the main ad analysis flow.
+- 2026-06-07: Inspected SQLite schema and six persisted completed analyses.
+- 2026-06-07: Verified backend compilation/import and current API route registration.
+- 2026-06-07: Verified Next.js production build succeeds.
+- 2026-06-07: Completed current-state product analysis.
+- 2026-06-07: Implemented full-share-message URL extraction and additive database migrations.
+- 2026-06-07: Added persisted job APIs, confirmation state, retry, and automatic workflow.
+- 2026-06-07: Fixed Douyin media download using embedded CDN playback URLs.
+- 2026-06-07: Connected Whisper and timestamped keyframes to the main agent pipeline.
+- 2026-06-07: Added professional Douyin article/script and Xiaohongshu publishing outputs.
+- 2026-06-07: Rebuilt frontend and completed browser verification.
+- 2026-06-07: Diagnosed the unused Doubao model as a missing `video_path` handoff in the automatic workflow.
+- 2026-06-07: Approved strict evidence-driven mode and wrote the architecture/specification and TDD implementation plan.
+- 2026-06-07: Added failing tests that reproduced the missing video handoff and incorrect video-to-text fallback.
+- 2026-06-07: Completed evidence normalization, independent audit, anchored scoring, dual-candidate publishing, deterministic report, and PDF export implementation.
+- 2026-06-07: First real strict-mode job confirmed Doubao full-video usage, but exposed an overly strict audit protocol; claim-ID approval/rejection was added.
+- 2026-06-07: Direct rerun attempt from the repository root failed because the backend service import path was not active; rerun moved to the backend working directory.
+- 2026-06-07: Calibrated contradictory trust scores while preserving both model and deterministic audit values.
+- 2026-06-07: Final real publishing pass excluded rejected claims and selected the same candidate in forward/reverse judging.
+- 2026-06-07: Verified Markdown and PDF artifacts, desktop/mobile report layouts, export controls, and zero browser console errors.
+- 2026-06-07: Added category-rationale fallback so all seven score bars display real values when sub-dimension fields are absent.
+- 2026-06-07: Final verification passed: 29 backend tests, Python compilation, Next.js production build, real Doubao video job, and browser checks.

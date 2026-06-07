@@ -1,0 +1,42 @@
+.env
+.env.local
+.env.*.local
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Database
+backend/data/*.db
+
+# Uploads & exports (keep dir, ignore content)
+backend/uploads/*
+backend/exports/*
+!backend/uploads/.gitkeep
+!backend/exports/.gitkeep
+
+# Root-level runtime output
+exports/*
+uploads/*
+
+# Frontend
+frontend/.next/
+frontend/node_modules/
+frontend/out/
+
+# Claude Code / developer tooling
+.claude/
+.agents/
+.codex/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
