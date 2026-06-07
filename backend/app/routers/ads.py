@@ -575,10 +575,14 @@ def _load_json(value: str | None, default):
 @router.post("/jobs/{ad_id}/video", status_code=202)
 async def generate_video(
     ad_id: str,
-    background_tasks: BackgroundTasks,
     db=Depends(get_db),
 ):
     """Start video generation for a completed ad analysis."""
+    import asyncio
+    import traceback
+    import logging
+    _logger = logging.getLogger("video_api")
+
     cursor = await db.execute("SELECT * FROM ads WHERE id = ?", (ad_id,))
     row = await cursor.fetchone()
     if not row:
@@ -586,9 +590,23 @@ async def generate_video(
     if row["status"] != "completed":
         raise HTTPException(status_code=400, detail="只有已完成的分析才能生成视频")
 
+    # Check video status: prevent duplicate generation
+    video_status = row["video_status"] or ""
+    if video_status == "generating":
+        raise HTTPException(status_code=409, detail="视频正在生成中，请稍后再试")
+
     analysis = _load_json(row["analysis_json"], {})
     if not analysis:
         raise HTTPException(status_code=400, detail="没有分析数据，无法生成视频")
+
+    # Snapshot row data before connection closes
+    ad_record = {
+        "id": row["id"],
+        "brand_name": row["brand_name"] or "",
+        "product_name": row["product_name"] or "",
+        "industry": row["industry"] or "",
+        "platform": row["platform"] or "",
+    }
 
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     await db.execute(
@@ -598,27 +616,43 @@ async def generate_video(
     await db.commit()
 
     from ..video_pipeline import run_video_pipeline
+    from ..database import DB_PATH as _DB_PATH
 
     async def _generate():
-        import aiosqlite
-        from ..database import DB_PATH as _DB_PATH
-        async with aiosqlite.connect(str(_DB_PATH)) as _db:
-            _db.row_factory = aiosqlite.Row
-            result = await run_video_pipeline(dict(row), analysis)
+        _logger.info(f"[video:{ad_id}] Background task started")
+        try:
+            import aiosqlite
+            result = await run_video_pipeline(ad_record, analysis)
             now2 = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            if result["status"] == "completed":
-                await _db.execute(
-                    "UPDATE ads SET video_status = 'completed', video_path = ?, updated_at = ? WHERE id = ?",
-                    (result["video_path"], now2, ad_id),
-                )
-            else:
-                await _db.execute(
-                    "UPDATE ads SET video_status = 'failed', video_path = ?, updated_at = ? WHERE id = ?",
-                    (result.get("error", ""), now2, ad_id),
-                )
-            await _db.commit()
+            _logger.info(f"[video:{ad_id}] Pipeline result: {result.get('status')}")
+            async with aiosqlite.connect(str(_DB_PATH)) as _db:
+                _db.row_factory = aiosqlite.Row
+                if result["status"] == "completed":
+                    await _db.execute(
+                        "UPDATE ads SET video_status = 'completed', video_path = ?, updated_at = ? WHERE id = ?",
+                        (result["video_path"], now2, ad_id),
+                    )
+                else:
+                    await _db.execute(
+                        "UPDATE ads SET video_status = 'failed', video_path = ?, updated_at = ? WHERE id = ?",
+                        (result.get("error", ""), now2, ad_id),
+                    )
+                await _db.commit()
+            _logger.info(f"[video:{ad_id}] DB updated")
+        except Exception as exc:
+            _logger.error(f"[video:{ad_id}] Background task crashed: {exc}\n{traceback.format_exc()}")
+            try:
+                import aiosqlite
+                async with aiosqlite.connect(str(_DB_PATH)) as _db:
+                    await _db.execute(
+                        "UPDATE ads SET video_status = 'failed', video_path = ?, updated_at = ? WHERE id = ?",
+                        (f"内部错误: {exc}", datetime.now().strftime("%Y-%m-%d %H:%M:%S"), ad_id),
+                    )
+                    await _db.commit()
+            except Exception:
+                _logger.error(f"[video:{ad_id}] Even DB error update failed")
 
-    background_tasks.add_task(_generate)
+    asyncio.create_task(_generate())
 
     return {"status": "generating", "video_url": ""}
 
