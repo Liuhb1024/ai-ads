@@ -19,9 +19,6 @@ from ..schemas import (
     AdCreateResponse,
     AdDetail,
     AdSummary,
-    CompareRequest,
-    CompareResponse,
-    ComparisonDetail,
     ErrorResponse,
     HealthResponse,
     JobCreateRequest,
@@ -33,7 +30,7 @@ from ..schemas import (
     MediaAnalyzeResponse,
 )
 from ..share_text import ShareTextError, extract_supported_url
-from ..swipe_index import search as semantic_search
+from ..swipe_index import invalidate_index, search as semantic_search
 from ..workflow import continue_job, run_job
 
 import sys
@@ -57,7 +54,7 @@ EXPORTS_DIR.mkdir(parents=True, exist_ok=True)
 
 @router.get("/health", response_model=HealthResponse)
 async def health_check():
-    return HealthResponse(status="ok", version="0.2.0", mock_mode=not is_configured())
+    return HealthResponse(status="ok", version="0.3.1", mock_mode=not is_configured())
 
 
 # ── Link parsing ────────────────────────────────────────
@@ -324,12 +321,14 @@ async def search_ads(
     if not results:
         return {"items": [], "total": 0, "query": q}
 
-    id_set = ", ".join(f"'{r['id']}'" for r in results)
+    result_ids = [str(result["id"]) for result in results]
     score_by_id = {r["id"]: r["score"] for r in results}
+    placeholders = ", ".join("?" for _ in result_ids)
 
     cursor = await db.execute(
         f"""SELECT id, brand_name, product_name, industry, platform, status, created_at, analysis_json
-            FROM ads WHERE id IN ({id_set})"""
+            FROM ads WHERE id IN ({placeholders})""",
+        result_ids,
     )
     rows = await cursor.fetchall()
 
@@ -357,59 +356,6 @@ async def search_ads(
 
     items.sort(key=lambda x: x["_score"], reverse=True)
     return {"items": items, "total": len(items), "query": q}
-
-
-# ── Creative A/B comparison ────────────────────────────
-
-from ..comparison_engine import run_comparison
-
-
-@router.post("/compare", response_model=CompareResponse)
-async def compare_ads(req: CompareRequest, db=Depends(get_db)):
-    """Compare two completed ads side-by-side with LLM-powered prediction."""
-    if req.ad_id_a == req.ad_id_b:
-        raise HTTPException(400, "不能对比同一条广告")
-
-    rows = []
-    for ad_id in (req.ad_id_a, req.ad_id_b):
-        cursor = await db.execute("SELECT * FROM ads WHERE id = ?", (ad_id,))
-        row = await cursor.fetchone()
-        if not row:
-            raise HTTPException(404, f"广告 {ad_id} 不存在")
-        if row["status"] != "completed":
-            raise HTTPException(400, f"广告 {ad_id} 尚未分析完成")
-        rows.append(dict(row))
-
-    comparison = await run_comparison(rows[0], rows[1])
-
-    def _build_detail(row: dict, prefix: str) -> ComparisonDetail:
-        scoring = {}
-        analysis_json = json.loads(row["analysis_json"]) if row["analysis_json"] else {}
-        scoring_blob = (analysis_json.get("scoring") or {}) if isinstance(analysis_json, dict) else {}
-        scoring = scoring_blob.get("scoring", scoring_blob) if isinstance(scoring_blob, dict) else {}
-        return ComparisonDetail(
-            ad_id=row["id"],
-            brand_name=row["brand_name"],
-            product_name=row["product_name"] or "",
-            platform=row["platform"],
-            industry=row["industry"],
-            overall_score=int(scoring.get("overall_score", 0)) if isinstance(scoring, dict) else 0,
-            tier=str(scoring.get("tier", "")) if isinstance(scoring, dict) else "",
-            strengths=comparison.get(f"ad_{prefix}_strengths", []),
-            weaknesses=comparison.get(f"ad_{prefix}_weaknesses", []),
-        )
-
-    return CompareResponse(
-        ad_a=_build_detail(rows[0], "a"),
-        ad_b=_build_detail(rows[1], "b"),
-        predicted_winner=comparison.get("predicted_winner", "tie"),
-        confidence=comparison.get("confidence", "low"),
-        key_differences=comparison.get("key_differences", []),
-        analysis_markdown=comparison.get("analysis_markdown", ""),
-        hook_comparison=comparison.get("hook_comparison", ""),
-        audience_comparison=comparison.get("audience_comparison", ""),
-        trust_comparison=comparison.get("trust_comparison", ""),
-    )
 
 
 # ── Get ad detail ───────────────────────────────────────
@@ -490,6 +436,7 @@ async def _run_legacy_analysis(ad_id: str) -> None:
                 (json.dumps(result, ensure_ascii=False), now, ad_id),
             )
             await db.commit()
+            invalidate_index()
         except Exception as exc:
             await db.execute(
                 "UPDATE ads SET status = 'failed', error_message = ?, failed_stage = 'analyzing', updated_at = ? WHERE id = ?",
@@ -620,3 +567,92 @@ def _load_json(value: str | None, default):
         return json.loads(value) if value else default
     except (json.JSONDecodeError, TypeError):
         return default
+
+
+# ── Video generation ──────────────────────────────────────
+
+@router.post("/jobs/{ad_id}/video", status_code=202)
+async def generate_video(
+    ad_id: str,
+    background_tasks: BackgroundTasks,
+    db=Depends(get_db),
+):
+    """Start video generation for a completed ad analysis."""
+    cursor = await db.execute("SELECT * FROM ads WHERE id = ?", (ad_id,))
+    row = await cursor.fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="分析任务不存在")
+    if row["status"] != "completed":
+        raise HTTPException(status_code=400, detail="只有已完成的分析才能生成视频")
+
+    analysis = _load_json(row["analysis_json"], {})
+    if not analysis:
+        raise HTTPException(status_code=400, detail="没有分析数据，无法生成视频")
+
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    await db.execute(
+        "UPDATE ads SET video_status = 'generating', video_path = '', updated_at = ? WHERE id = ?",
+        (now, ad_id),
+    )
+    await db.commit()
+
+    from ..video_pipeline import run_video_pipeline
+
+    async def _generate():
+        import aiosqlite
+        from ..database import DB_PATH as _DB_PATH
+        async with aiosqlite.connect(str(_DB_PATH)) as _db:
+            _db.row_factory = aiosqlite.Row
+            result = await run_video_pipeline(dict(row), analysis)
+            now2 = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            if result["status"] == "completed":
+                await _db.execute(
+                    "UPDATE ads SET video_status = 'completed', video_path = ?, updated_at = ? WHERE id = ?",
+                    (result["video_path"], now2, ad_id),
+                )
+            else:
+                await _db.execute(
+                    "UPDATE ads SET video_status = 'failed', video_path = ?, updated_at = ? WHERE id = ?",
+                    (result.get("error", ""), now2, ad_id),
+                )
+            await _db.commit()
+
+    background_tasks.add_task(_generate)
+
+    return {"status": "generating", "video_url": ""}
+
+
+@router.get("/jobs/{ad_id}/video")
+async def get_video_status(ad_id: str, db=Depends(get_db)):
+    """Check video generation status."""
+    cursor = await db.execute("SELECT video_status, video_path FROM ads WHERE id = ?", (ad_id,))
+    row = await cursor.fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="分析任务不存在")
+
+    status = row["video_status"] or ""
+    video_url = f"/api/jobs/{ad_id}/video.mp4" if status == "completed" else ""
+    return {
+        "status": status,
+        "video_url": video_url,
+        "error": row["video_path"] if status == "failed" else None,
+    }
+
+
+@router.get("/jobs/{ad_id}/video.mp4")
+async def download_video(ad_id: str, db=Depends(get_db)):
+    """Download the generated video file."""
+    from fastapi.responses import FileResponse
+
+    cursor = await db.execute("SELECT video_status, video_path FROM ads WHERE id = ?", (ad_id,))
+    row = await cursor.fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="分析任务不存在")
+    if row["video_status"] != "completed" or not row["video_path"]:
+        raise HTTPException(status_code=404, detail="视频尚未生成或生成失败")
+
+    path = row["video_path"]
+    if not os.path.exists(path):
+        raise HTTPException(status_code=404, detail="视频文件不存在")
+
+    return FileResponse(path, media_type="video/mp4", filename=f"{ad_id}_analysis.mp4")

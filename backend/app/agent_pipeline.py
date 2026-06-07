@@ -1,4 +1,4 @@
-"""Real LLM agent pipeline — 6 agents chained for ad analysis."""
+"""Evidence-driven seven-agent pipeline for short-video ad analysis."""
 
 from __future__ import annotations
 
@@ -355,10 +355,10 @@ AUDITOR_SYSTEM = """你是一位独立事实审查编辑。你的职责是质疑
 
 
 # ═══════════════════════════════════════════════════════════
-# Agent 6: Note Writer
+# Agent 7: Editorial Metadata
 # ═══════════════════════════════════════════════════════════
 
-AGENT5_SYSTEM = """你是一位顶级广告创意总监，撰写深刻的广告洞察笔记。
+EDITORIAL_SYSTEM = """你是一位顶级广告创意总监，撰写深刻的广告洞察笔记。
 
 基于各 Agent 的分析结果，输出以下 JSON：
 
@@ -376,10 +376,10 @@ AGENT5_SYSTEM = """你是一位顶级广告创意总监，撰写深刻的广告�
 
 
 # ═══════════════════════════════════════════════════════════
-# Agent 7: Scoring
+# Agent 6: Anchored Scoring
 # ═══════════════════════════════════════════════════════════
 
-AGENT6_SYSTEM = (
+SCORING_SYSTEM = (
     '你是一位广告创意量化评估专家。基于素材证据而不是想象进行评分。'
     '直接输出纯 JSON（不要 markdown 代码块包裹）。\n\n'
     '{"scoring":{"hook":{"hook_type":"类型","hook_type_score":3,"opening_impact":3,"curiosity_gap":3},'
@@ -678,7 +678,7 @@ async def run_agent_pipeline(
     # ── Agent 6: Scoring ──
     logger.info("Agent 6/7: Anchored scoring...")
     a6 = await chat_completion(
-        system=AGENT6_SYSTEM,
+        system=SCORING_SYSTEM,
         user=(
             f"证据账本：\n{_compact_json({'evidence_ledger': evidence_ledger})}"
             f"\n\n通过门禁的结论：\n{_compact_json({'claims': safe_claims})}"
@@ -708,7 +708,7 @@ async def run_agent_pipeline(
 {ctx}"""
 
     a5a = await chat_completion(
-        system=AGENT5_SYSTEM,
+        system=EDITORIAL_SYSTEM,
         user=a5_user,
         response_format=JSON_FORMAT,
     )

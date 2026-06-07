@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { getJob, JobState } from '@/lib/api';
+import { getJob, JobState, generateVideo, getVideoStatus, videoDownloadUrl } from '@/lib/api';
 import ResultNav from './ResultNav';
 import CopyBlock from './CopyBlock';
 import MarkdownPreview from './MarkdownPreview';
@@ -83,6 +83,7 @@ export default function PublicationWorkspace({
           </section>
           <ScoreCard data={job.analysis?.scoring || null} />
           <MarkdownPreview id={id} content={job.analysis?.final_note?.markdown_content || '暂无洞察正文'} />
+          <VideoSection adId={id} initialStatus={job.video_status} />
         </main>
       )}
       {mode === 'douyin' && (
@@ -117,6 +118,77 @@ export default function PublicationWorkspace({
           <CopyBlock label="图片卡片建议" content={(publishing.xiaohongshu?.image_card_ideas || []).join('\n')} />
         </main>
       )}
+    </div>
+  );
+}
+
+function VideoSection({ adId, initialStatus }: { adId: string; initialStatus?: string }) {
+  const [status, setStatus] = useState(initialStatus || '');
+  const [generating, setGenerating] = useState(false);
+  const [msg, setMsg] = useState('');
+
+  useEffect(() => {
+    if (status === 'generating') {
+      const timer = setInterval(async () => {
+        try {
+          const data = await getVideoStatus(adId);
+          setStatus(data.status);
+          if (data.status === 'completed' || data.status === 'failed') {
+            clearInterval(timer);
+          }
+          if (data.status === 'failed' && data.error) {
+            setMsg(data.error);
+          }
+        } catch { clearInterval(timer); }
+      }, 3000);
+      return () => clearInterval(timer);
+    }
+  }, [status, adId]);
+
+  const handleGenerate = async () => {
+    setGenerating(true);
+    setMsg('');
+    try {
+      await generateVideo(adId);
+      setStatus('generating');
+    } catch (e: any) {
+      setMsg(e.message || '生成失败');
+    }
+    setGenerating(false);
+  };
+
+  if (status === 'completed') {
+    return (
+      <div className="mt-8 p-5 border border-emerald-200 rounded-xl bg-emerald-50 text-center">
+        <p className="text-sm font-semibold text-emerald-800 mb-3">分析视频已生成</p>
+        <a
+          href={videoDownloadUrl(adId)}
+          className="inline-flex items-center gap-2 px-6 py-2.5 bg-emerald-600 text-white rounded-lg text-sm hover:bg-emerald-700 transition-colors"
+          download
+        >
+          <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" /></svg>
+          下载视频 (MP4)
+        </a>
+      </div>
+    );
+  }
+
+  return (
+    <div className="mt-8 p-5 border border-stone-200 rounded-xl text-center">
+      <p className="text-sm font-semibold text-stone-700 mb-2">生成分析视频</p>
+      <p className="text-xs text-stone-500 mb-4">将分析结果自动制成 45 秒横屏解说视频</p>
+      {msg && <p className="text-xs text-red-600 mb-2">{msg}</p>}
+      <button
+        className={`px-6 py-2.5 rounded-lg text-sm font-medium transition-colors ${
+          generating || status === 'generating'
+            ? 'bg-stone-200 text-stone-500 cursor-not-allowed'
+            : 'bg-stone-900 text-white hover:bg-stone-800'
+        }`}
+        disabled={generating || status === 'generating'}
+        onClick={handleGenerate}
+      >
+        {status === 'generating' ? '生成中...' : generating ? '请求中...' : '生成分析视频'}
+      </button>
     </div>
   );
 }

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import aiosqlite
 from pathlib import Path
@@ -12,6 +13,7 @@ _index = None
 _texts: list[str] = []
 _ad_ids: list[str] = []
 _is_built = False
+_build_lock = asyncio.Lock()
 
 
 def _get_embedder():
@@ -41,9 +43,25 @@ def _ad_search_text(row: dict) -> str:
     return " ".join(parts)
 
 
+def invalidate_index() -> None:
+    """Discard the in-memory index so the next search sees current database state."""
+    global _index, _texts, _ad_ids, _is_built
+    _index = None
+    _texts = []
+    _ad_ids = []
+    _is_built = False
+
+
 async def build_index() -> bool:
     global _index, _texts, _ad_ids, _is_built
+    async with _build_lock:
+        if _is_built:
+            return True
+        return await _build_index_unlocked()
 
+
+async def _build_index_unlocked() -> bool:
+    global _index, _texts, _ad_ids, _is_built
     try:
         async with aiosqlite.connect(str(_DB_PATH)) as conn:
             conn.row_factory = aiosqlite.Row
@@ -82,7 +100,9 @@ async def build_index() -> bool:
 
 async def search(query: str, top_k: int = 20) -> list[dict[str, Any]]:
     if not _is_built:
-        await build_index()
+        built = await build_index()
+        if not built:
+            return []
 
     if _index is None or not _ad_ids:
         return []

@@ -30,6 +30,8 @@ AD_COLUMN_MIGRATIONS = {
     "frames_json": "TEXT",
     "publishing_json": "TEXT",
     "failed_stage": "TEXT",
+    "video_status": "TEXT DEFAULT ''",
+    "video_path": "TEXT DEFAULT ''",
 }
 
 
@@ -40,28 +42,6 @@ async def get_db():
         yield db
     finally:
         await db.close()
-
-
-async def _create_expert_scores(db):
-    await db.execute(
-        """CREATE TABLE IF NOT EXISTS expert_scores (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            ad_id TEXT NOT NULL,
-            expert_id TEXT NOT NULL,
-            overall_score INTEGER NOT NULL,
-            hook_score INTEGER NOT NULL,
-            messaging_score INTEGER NOT NULL,
-            conversion_score INTEGER NOT NULL,
-            emotion_score INTEGER NOT NULL,
-            trust_score INTEGER NOT NULL,
-            production_score INTEGER NOT NULL,
-            innovation_score INTEGER NOT NULL,
-            notes TEXT,
-            created_at TEXT DEFAULT (datetime('now')),
-            UNIQUE(ad_id, expert_id),
-            FOREIGN KEY (ad_id) REFERENCES ads(id)
-        )"""
-    )
 
 
 async def init_db(db_path: Path | str = DB_PATH):
@@ -109,6 +89,5 @@ async def init_db(db_path: Path | str = DB_PATH):
         if column not in existing_columns:
             await db.execute(f"ALTER TABLE ads ADD COLUMN {column} {definition}")
 
-    await _create_expert_scores(db)
     await db.commit()
     await db.close()
