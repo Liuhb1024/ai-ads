@@ -85,14 +85,18 @@ export default function PublicationWorkspace({
           <MarkdownPreview id={id} content={job.analysis?.final_note?.markdown_content || '暂无洞察正文'} />
 
           {/* Video generation entry */}
-          <div className="mt-8 p-5 border border-stone-200 rounded-xl text-center">
-            <p className="text-sm font-semibold text-stone-700 mb-2">生成分析视频</p>
-            <p className="text-xs text-stone-500 mb-4">将分析结果自动制成 45 秒横屏解说视频</p>
+          <div className="state-card" style={{ marginTop: 44, textAlign: 'center' }}>
+            <p className="eyebrow">VIDEO PRODUCTION</p>
+            <h2 style={{ fontSize: 28, margin: '12px 0' }}>制作分析视频</h2>
+            <p style={{ color: 'var(--muted)', marginBottom: 20 }}>
+              将分析结果自动制成 45 秒横屏解说视频，AI 插图 + 配音 + 字幕
+            </p>
             <a
               href={`/jobs/${id}/video`}
-              className="inline-block px-6 py-2.5 bg-stone-900 text-white rounded-lg text-sm font-medium hover:bg-stone-800 transition-colors"
+              className="report-action primary"
+              style={{ display: 'inline-flex', fontSize: 12, padding: '12px 28px' }}
             >
-              进入视频生成 →
+              进入视频生产管线 →
             </a>
           </div>
         </main>
