@@ -444,6 +444,87 @@ def _compact_json(obj: dict) -> str:
     return json.dumps(obj, ensure_ascii=False, separators=(",", ":"))
 
 
+# ═══════════════════════════════════════════════════════════
+# Industry-specific analysis dimensions (inspired by claude-ads industry templates)
+# ═══════════════════════════════════════════════════════════
+
+_INDUSTRY_DIMENSIONS = {
+    "美妆": (
+        "美妆行业分析校准：\n"
+        "  - 信任关键：KOL/成分党/素人实测，而非品牌知名度\n"
+        "  - 常见钩子：素人试用对比、成分揭秘、大牌平替对标\n"
+        "  - 转化驱动：使用场景共鸣（约会/通勤/聚会）、变美焦虑\n"
+        "  - 竞争维度：成分对标（如'XX大牌同款成分'）、价格带定位\n"
+        "  - 注意：美妆广告的'效果'多为光影+滤镜，需标注画面可信度"
+    ),
+    "食品": (
+        "食品行业分析校准：\n"
+        "  - 信任关键：产地实拍/工艺可视化/配料表特写\n"
+        "  - 常见钩子：源头工厂直发、吃播体验、价格暴利揭秘\n"
+        "  - 转化驱动：健康焦虑（0添加/无糖）、口感想象、家庭场景\n"
+        "  - 竞争维度：配料对比、渠道差异（工厂vs超市）、新鲜度\n"
+        "  - 注意：食品广告常夸大'源头''农家''手工'，需标注声称vs证据"
+    ),
+    "3C": (
+        "3C/数码行业分析校准：\n"
+        "  - 信任关键：参数实测/跑分/拆机实拍，而非广告词\n"
+        "  - 常见钩子：价格屠夫、黑科技揭秘、参数碾压同价位\n"
+        "  - 转化驱动：效率提升（省时间）、性价比（省预算）、场景痛点\n"
+        "  - 竞争维度：同价位横向PK、跨价位越级挑战\n"
+        "  - 注意：3C广告的'性能提升X%'需看是否有实测数据支撑"
+    ),
+    "教育": (
+        "教育/知识付费行业分析校准：\n"
+        "  - 信任关键：讲师履历/学员案例/课程大纲可验证性\n"
+        "  - 常见钩子：反常识观点、薪资/Offer截图、免费课/资料引流\n"
+        "  - 转化驱动：认知差制造（'原来这么简单'）、结果焦虑、沉没成本\n"
+        "  - 竞争维度：传统教育vs新方式、自学vs系统学、国内vs海外\n"
+        "  - 注意：教育广告的效果承诺需严格区分'学员案例'和'普遍预期'"
+    ),
+    "电商": (
+        "电商/平台行业分析校准：\n"
+        "  - 信任关键：销量数字/好评率/售后政策可验证\n"
+        "  - 常见钩子：限时优惠倒计时、库存紧迫、性价比对比\n"
+        "  - 转化驱动：价格刺激、社交证明（'XX万人已买'）、场景植入\n"
+        "  - 竞争维度：平台比价、同款PK、渠道专属\n"
+        "  - 注意：电商广告的价格优势常通过与模糊'市场价'对比制造，需标注"
+    ),
+    "金融": (
+        "金融/保险行业分析校准：\n"
+        "  - 信任关键：牌照资质/合规话术/大厂背书\n"
+        "  - 常见钩子：利率对比、政策解读、真实用户案例\n"
+        "  - 转化驱动：风险恐惧、收益预期、信任构建（大平台=安全）\n"
+        "  - 竞争维度：传统银行vs互联网金融、渠道成本对比\n"
+        "  - 注意：金融广告的收益承诺受监管约束，需标注'声称'vs'保证'"
+    ),
+    "游戏": (
+        "游戏行业分析校准：\n"
+        "  - 信任关键：实机画面/玩法演示/玩家评价\n"
+        "  - 常见钩子：精彩操作集锦、剧情悬念、限时福利/首充\n"
+        "  - 转化驱动：社交驱动（组队/公会）、成就系统、限时奖励\n"
+        "  - 竞争维度：同类玩法对比、画质/流畅度、氪金度\n"
+        "  - 注意：游戏广告常使用CG/开发中画面，需标注是否为实机录制"
+    ),
+}
+
+_DEFAULT_INDUSTRY_GUIDE = (
+    "通用分析校准：\n"
+    "  - 从素材反推行业特征，不预设分析框架\n"
+    "  - 重点关注：信任构建方式、转化路径、目标人群匹配度\n"
+    "  - 注意区分行业通用做法 vs 本条广告的创新点"
+)
+
+
+def _industry_guide(industry: str) -> str:
+    """Return industry-specific analysis guide for Agent 2 and Agent 3."""
+    if not industry:
+        return _DEFAULT_INDUSTRY_GUIDE
+    for key, guide in _INDUSTRY_DIMENSIONS.items():
+        if key in industry:
+            return guide
+    return _DEFAULT_INDUSTRY_GUIDE
+
+
 def _ok(result: dict) -> bool:
     """Check if LLM result is valid (no error, no raw fallback)."""
     return "_error" not in result and "_raw" not in result
@@ -539,9 +620,10 @@ async def run_agent_pipeline(
 
     # ── Agent 2: Ad Strategy ──
     logger.info("Agent 2/7: Evidence-linked strategy...")
+    industry_guide = _industry_guide(ad.get("industry", ""))
     a2 = await chat_completion(
         system=AGENT2_SYSTEM,
-        user=f"素材分析：\n{_compact_json(a1)}\n\n广告原始信息：\n{ctx}",
+        user=f"行业分析指引：\n{industry_guide}\n\n素材分析：\n{_compact_json(a1)}\n\n广告原始信息：\n{ctx}",
         response_format=JSON_FORMAT,
     )
     a2 = apply_quality_gate(a2, evidence_ledger)
@@ -551,7 +633,7 @@ async def run_agent_pipeline(
     logger.info("Agent 3/7: Audience hypotheses...")
     a3 = await chat_completion(
         system=AGENT3_SYSTEM,
-        user=f"素材分析：\n{_compact_json(a1)}\n\n策略分析：\n{_compact_json(a2)}\n\n广告信息：\n{ctx}",
+        user=f"行业分析指引：\n{industry_guide}\n\n素材分析：\n{_compact_json(a1)}\n\n策略分析：\n{_compact_json(a2)}\n\n广告信息：\n{ctx}",
         response_format=JSON_FORMAT,
     )
     a3 = apply_quality_gate(a3, evidence_ledger)
