@@ -1,10 +1,74 @@
 from __future__ import annotations
 
 import json
+import re
 from typing import Any
 
 from .analysis_quality import collect_claims, publication_claims
 from .llm_client import chat_completion, is_configured
+
+
+# Anti-slop patterns adapted from LazyReel's "kill_the_slop" methodology.
+# These detect AI-template language in Chinese ad/publishing content.
+_SLOP_PATTERNS = [
+    (r"作为AI|做为一个AI|作为一个人工智能", "AI声明"),
+    (r"在当今.*?时代|在当下.*?社会|随着.*?的发展", "时代背景套话"),
+    (r"不容错过|千万不要错过|千万别错过|机不可失", "夸大紧迫"),
+    (r"简直是.*?神器|堪称.*?神器|绝对是.*?神器", "神器过度"),
+    (r"绝绝子|YYDS|天花板|宝藏|闭眼入", "网络热词堆砌"),
+    (r"让你的.*?从此不再|让你的.*?不再困扰", "万能解法句式"),
+    (r"彻底颠覆|前所未有|革命性|划时代", "过度夸张"),
+    (r"还不快冲|赶紧冲|冲冲冲|快冲|必须冲", "硬促感"),
+    (r"太惊艳了|让人惊艳|惊艳到我|惊艳众人", "惊艳疲劳"),
+    (r"亲测有效|亲测好用|亲测推荐|本人亲测", "伪亲测"),
+]
+
+# Maximum slop matches allowed before fallback
+_MAX_SLOP_MATCHES = 2
+
+
+def check_slop(text: str) -> dict[str, Any]:
+    """Check text against anti-slop patterns.
+
+    Returns a dict with:
+      - match_count: total number of pattern matches
+      - matches: list of {"pattern_label": "...", "matched_text": "..."}
+      - clean: bool, True if match_count <= _MAX_SLOP_MATCHES
+    """
+    matches = []
+    for pattern, label in _SLOP_PATTERNS:
+        for m in re.finditer(pattern, text):
+            matches.append({"label": label, "matched_text": m.group(0)})
+    return {
+        "match_count": len(matches),
+        "matches": matches,
+        "clean": len(matches) <= _MAX_SLOP_MATCHES,
+    }
+
+
+def _candidate_full_text(candidate: dict) -> str:
+    """Extract all text from a candidate for slop checking."""
+    parts = []
+    douyin = candidate.get("douyin_article") or {}
+    script = candidate.get("douyin_script") or {}
+    xhs = candidate.get("xiaohongshu") or {}
+    for d in (douyin, script, xhs):
+        if isinstance(d, dict):
+            for key in ("title", "hook", "body", "cta", "full_script"):
+                val = d.get(key)
+                if isinstance(val, str):
+                    parts.append(val)
+        if isinstance(d, dict):
+            for key in ("beats",):
+                beats = d.get(key)
+                if isinstance(beats, list):
+                    for beat in beats:
+                        if isinstance(beat, dict):
+                            for bk in ("label", "script"):
+                                bv = beat.get(bk)
+                                if isinstance(bv, str):
+                                    parts.append(bv)
+    return "\n".join(parts)
 
 
 CANDIDATE_SYSTEM = """你是资深中文内容总编。请基于已审查通过的证据，生成两套角度明显不同、都可直接发布的自媒体方案。
@@ -94,6 +158,28 @@ async def generate_publishing_output(ad: dict, analysis: dict) -> dict[str, Any]
                 "selection_method": "position_balanced_pairwise_judging",
             }
             if _valid_output(selected):
+                # Anti-slop check: if winner has excessive slop, try the loser
+                selected_text = _candidate_full_text(selected)
+                slop_result = check_slop(selected_text)
+                selected["_editorial_meta"]["slop_check"] = slop_result
+                if not slop_result["clean"]:
+                    alt_id = "B" if selected.get("candidate_id") == "A" else "A"
+                    alt = candidates[0] if alt_id == "A" else candidates[1]
+                    alt_text = _candidate_full_text(alt)
+                    alt_slop = check_slop(alt_text)
+                    if alt_slop["clean"] and _valid_output(alt):
+                        alt["_editorial_meta"] = {
+                            "selected_candidate": alt_id,
+                            "concept_name": alt.get("concept_name", ""),
+                            "editorial_angle": alt.get("editorial_angle", ""),
+                            "slop_swap_reason": (
+                                f"原选中候选({selected.get('candidate_id')})含{slop_result['match_count']}个slop匹配，"
+                                f"切换到{alt_id}({alt_slop['match_count']}个)"
+                            ),
+                            "original_winner_slop": slop_result,
+                            "selection_method": "position_balanced_with_slop_fallback",
+                        }
+                        return alt
                 return selected
 
     return _fallback_output(ad, analysis)

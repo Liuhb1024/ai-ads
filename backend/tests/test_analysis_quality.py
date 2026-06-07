@@ -72,8 +72,8 @@ class AuditNormalizationTests(unittest.TestCase):
             ],
         )
 
-        self.assertEqual(audit["verdict"], "review")
-        self.assertLessEqual(audit["trust_score"], 69)
+        self.assertEqual(audit["verdict"], "reject")
+        self.assertLessEqual(audit["trust_score"], 39)
         self.assertIn("未经证实的效果", audit["unsupported_claims"])
         self.assertIn("C001", audit["unsupported_claim_ids"])
 

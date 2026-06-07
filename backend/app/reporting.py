@@ -264,6 +264,7 @@ def _strategy_analysis(strategy: dict[str, Any]) -> list[str]:
         "",
         "### 创意结构拆解",
         "",
+        f"- **钩子模式**：{_hook_pattern_display(strategy.get('hook_pattern'))}",
         f"- **钩子类型**：{_text(creative.get('hook_type'), '未识别')}",
         f"- **信任建立**：{_text(creative.get('trust_building'), '未识别')}",
         f"- **转化收尾**：{_text(creative.get('closing_tactic'), '未识别')}",
@@ -375,7 +376,7 @@ def _inspiration_section(analysis: dict[str, Any], publishing: dict[str, Any]) -
     return [
         "### 如果我做抖音/自媒体",
         "",
-        f"- 把开头做成一个可复述的反常识判断：{_text(article.get('title'), _text(creative.get('hook_type'), '先给观点，再给证据'))}。",
+        f"- 钩子策略：{_hook_pattern_display(strategy.get('hook_pattern'))}。把开头做成一个可复述的反常识判断：{_text(article.get('title'), _text(creative.get('hook_type'), '先给观点，再给证据'))}。",
         "- 用证据编号组织口播，不把推断说成事实；优先讲最能被画面验证的 3 个点。",
         f"- 结构可以复用为：{_text(dna.get('narrative_template'), _text(creative.get('narrative_structure'), '钩子-证明-行动'))}。",
         f"- 评分启发：当前整体分 {_text(score_container.get('overall_score'), '—')}，优先补强最低置信度或最低分的环节，而不是只改标题。",
@@ -539,3 +540,16 @@ def _number(value: Any) -> int:
         return max(0, min(100, int(float(value))))
     except (TypeError, ValueError):
         return 0
+
+
+def _hook_pattern_display(hook_pattern: Any) -> str:
+    """Display hook pattern with primary and secondary labels."""
+    if not isinstance(hook_pattern, dict):
+        return _text(hook_pattern, "未识别")
+    primary = _text(hook_pattern.get("primary"), "")
+    secondary = _text(hook_pattern.get("secondary"), "")
+    if primary and secondary:
+        return f"{primary} + {secondary}"
+    if primary:
+        return primary
+    return "未识别"

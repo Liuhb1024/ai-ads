@@ -1,0 +1,188 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Headroom Stats</title>
+<style>
+  :root { --bg: #0d1117; --card: #161b22; --border: #30363d; --text: #c9d1d9; --muted: #8b949e; --green: #3fb950; --blue: #58a6ff; --orange: #d2991d; --red: #f85149; }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: var(--bg); color: var(--text); padding: 24px; max-width: 960px; margin: 0 auto; }
+  h1 { font-size: 20px; margin-bottom: 4px; }
+  .sub { color: var(--muted); font-size: 13px; margin-bottom: 24px; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; margin-bottom: 24px; }
+  .card { background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 16px; }
+  .card .label { font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 6px; }
+  .card .value { font-size: 28px; font-weight: 600; }
+  .card .unit { font-size: 13px; color: var(--muted); margin-left: 4px; }
+  .green { color: var(--green); }
+  .blue { color: var(--blue); }
+  .orange { color: var(--orange); }
+  .red { color: var(--red); }
+  .bar-wrap { background: var(--bg); border-radius: 4px; height: 8px; margin-top: 8px; overflow: hidden; }
+  .bar-fill { height: 100%; border-radius: 4px; transition: width 0.5s ease; }
+  .row { display: flex; justify-content: space-between; align-items: center; }
+  table { width: 100%; border-collapse: collapse; margin-top: 8px; }
+  th, td { text-align: left; padding: 8px 12px; font-size: 13px; }
+  th { color: var(--muted); font-weight: 500; border-bottom: 1px solid var(--border); }
+  td { border-bottom: 1px solid var(--border); }
+  .tag { display: inline-block; padding: 2px 8px; border-radius: 12px; font-size: 11px; font-weight: 500; }
+  .tag-on { background: #1a3a2a; color: var(--green); }
+  .tag-off { background: #3a1a1a; color: var(--red); }
+  .error { background: #3a1a1a; border: 1px solid var(--red); padding: 12px; border-radius: 8px; color: var(--red); font-size: 13px; }
+  .refresh { font-size: 12px; color: var(--muted); }
+</style>
+</head>
+<body>
+<h1>Headroom Proxy</h1>
+<div class="sub">v<span id="version">-</span> · <span id="mode">-</span> mode · 刷新 <span id="countdown">5</span>s</div>
+<div id="error" class="error" style="display:none"></div>
+
+<div class="grid">
+  <div class="card">
+    <div class="label">Token 节省</div>
+    <div class="value green" id="tokensSaved">-</div>
+  </div>
+  <div class="card">
+    <div class="label">压缩率</div>
+    <div class="value blue" id="savingsPct">-</div>
+  </div>
+  <div class="card">
+    <div class="label">API 请求数</div>
+    <div class="value" id="apiRequests">-</div>
+  </div>
+  <div class="card">
+    <div class="label">节省费用</div>
+    <div class="value orange" id="costSaved">-</div>
+  </div>
+</div>
+
+<div class="grid">
+  <div class="card">
+    <div class="label">输入 Token</div>
+    <div class="value" style="font-size:20px" id="inputTokens">-</div>
+  </div>
+  <div class="card">
+    <div class="label">输出 Token</div>
+    <div class="value" style="font-size:20px" id="outputTokens">-</div>
+  </div>
+  <div class="card">
+    <div class="label">缓存命中率</div>
+    <div class="value" style="font-size:20px" id="cacheHitRate">-</div>
+  </div>
+  <div class="card">
+    <div class="label">压缩请求数</div>
+    <div class="value" style="font-size:20px" id="compressedReqs">-</div>
+  </div>
+</div>
+
+<div class="card">
+  <div class="row" style="margin-bottom:12px">
+    <span class="label" style="margin-bottom:0">Token 节省明细</span>
+  </div>
+  <div style="display:flex; gap:24px; flex-wrap:wrap;">
+    <div style="flex:1; min-width:200px">
+      <div class="row" style="margin-bottom:8px"><span style="font-size:13px">Proxy 压缩</span><span style="font-size:13px" id="proxySavings">-</span></div>
+      <div class="bar-wrap"><div class="bar-fill green" id="proxyBar" style="width:0%"></div></div>
+    </div>
+    <div style="flex:1; min-width:200px">
+      <div class="row" style="margin-bottom:8px"><span style="font-size:13px">CLI 过滤 (RTK)</span><span style="font-size:13px" id="rtkSavings">-</span></div>
+      <div class="bar-wrap"><div class="bar-fill blue" id="rtkBar" style="width:0%"></div></div>
+    </div>
+    <div style="flex:1; min-width:200px">
+      <div class="row" style="margin-bottom:8px"><span style="font-size:13px">前缀缓存</span><span style="font-size:13px" id="cacheSavings">-</span></div>
+      <div class="bar-wrap"><div class="bar-fill orange" id="cacheBar" style="width:0%"></div></div>
+    </div>
+  </div>
+</div>
+
+<div class="card" style="margin-top:12px">
+  <div class="label">功能状态</div>
+  <div style="display:flex; gap:16px; flex-wrap:wrap; margin-top:8px;">
+    <div><span class="tag" id="tagOptimize">-</span> 压缩优化</div>
+    <div><span class="tag" id="tagCache">-</span> 缓存</div>
+    <div><span class="tag" id="tagRateLimit">-</span> 速率限制</div>
+    <div><span class="tag" id="tagMemory">-</span> 记忆</div>
+    <div><span class="tag" id="tagContextTool">-</span> RTK</div>
+    <div><span class="tag" id="tagCodeAware">-</span> Code-Aware</div>
+  </div>
+</div>
+
+<script>
+const API = 'http://localhost:8787/stats';
+
+function fmt(n) {
+  if (n == null || isNaN(n)) return '-';
+  if (n >= 1_000_000) return (n / 1_000_000).toFixed(1) + 'M';
+  if (n >= 1_000) return (n / 1_000).toFixed(1) + 'K';
+  return n.toFixed(0);
+}
+
+function pct(n) {
+  if (n == null || isNaN(n) || n === 0) return '-';
+  return n.toFixed(1) + '%';
+}
+
+function usd(n) {
+  if (n == null || isNaN(n) || n === 0) return '$0';
+  return '$' + n.toFixed(4);
+}
+
+async function refresh() {
+  try {
+    const res = await fetch(API);
+    const d = await res.json();
+
+    document.getElementById('error').style.display = 'none';
+    document.getElementById('version').textContent = d.health?.version || d.summary?.mode || '-';
+    document.getElementById('mode').textContent = d.summary?.mode || '-';
+
+    const s = d.savings || {};
+    document.getElementById('tokensSaved').innerHTML = fmt(s.total_tokens) + '<span class="unit">tokens</span>';
+    document.getElementById('savingsPct').innerHTML = pct(s.savings_percent);
+    document.getElementById('apiRequests').innerHTML = fmt(d.requests?.total || 0) + '<span class="unit">次</span>';
+    document.getElementById('costSaved').innerHTML = usd(d.cost?.total_saved_usd);
+
+    document.getElementById('inputTokens').innerHTML = fmt(d.tokens?.input);
+    document.getElementById('outputTokens').innerHTML = fmt(d.tokens?.output);
+    document.getElementById('cacheHitRate').textContent = pct(d.prefix_cache?.totals?.hit_rate);
+    document.getElementById('compressedReqs').textContent = fmt(d.summary?.compression?.requests_compressed || 0);
+
+    const proxySaved = s.by_layer?.compression?.tokens || 0;
+    const rtkSaved = s.by_layer?.cli_filtering?.tokens_saved || 0;
+    const cacheSaved = d.prefix_cache?.totals?.cache_read_tokens || 0;
+    const maxSaved = Math.max(proxySaved, rtkSaved, cacheSaved, 1);
+
+    document.getElementById('proxySavings').textContent = fmt(proxySaved);
+    document.getElementById('proxyBar').style.width = (proxySaved / maxSaved * 100).toFixed(0) + '%';
+    document.getElementById('rtkSavings').textContent = fmt(rtkSaved);
+    document.getElementById('rtkBar').style.width = (rtkSaved / maxSaved * 100).toFixed(0) + '%';
+    document.getElementById('cacheSavings').textContent = fmt(cacheSaved);
+    document.getElementById('cacheBar').style.width = (cacheSaved / maxSaved * 100).toFixed(0) + '%';
+
+    const health = d.health;
+    function tag(el, on) { el.className = 'tag ' + (on ? 'tag-on' : 'tag-off'); el.textContent = on ? 'ON' : 'OFF'; }
+    tag(document.getElementById('tagOptimize'), health?.checks?.startup?.enabled !== false);
+    tag(document.getElementById('tagCache'), d.cache != null);
+    tag(document.getElementById('tagRateLimit'), d.rate_limiter != null);
+    tag(document.getElementById('tagMemory'), d.health?.checks?.memory?.enabled === true);
+    tag(document.getElementById('tagContextTool'), d.context_tool?.stats?.installed === true);
+    tag(document.getElementById('tagCodeAware'), health?.config?.code_aware === true);
+
+  } catch (e) {
+    document.getElementById('error').style.display = 'block';
+    document.getElementById('error').textContent = '无法连接 headroom: ' + e.message;
+  }
+}
+
+let cd = 5;
+setInterval(() => {
+  cd--;
+  document.getElementById('countdown').textContent = cd;
+  if (cd <= 0) { refresh(); cd = 5; }
+}, 1000);
+
+refresh();
+</script>
+</body>
+</html>

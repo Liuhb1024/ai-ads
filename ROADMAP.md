@@ -4,9 +4,9 @@
 
 | # | 任务 | 状态 | 产出 |
 |---|------|------|------|
-| 1.1 | 结构化 Hook 分类：Agent 2 prompt 强制从 13 种 hook pattern 中选择，输出 `hook_pattern` 字段 | ⬜ | 报告钩子分析一致，可跨广告对比 |
-| 1.2 | Anti-Slop 检查：publishing 输出后检测 AI 味表述，超阈值回退 fallback | ⬜ | 发布稿质量兜底 |
-| 1.3 | Agent 5/6 并行化：`asyncio.gather` 同时跑审计 + 评分 | ⬜ | 总耗时减少 20-30% |
+| 1.1 | 结构化 Hook 分类：Agent 2 prompt 强制从 13 种 hook pattern 中选择，输出 `hook_pattern` 字段 | ✅ | 报告钩子分析一致，可跨广告对比 |
+| 1.2 | Anti-Slop 检查：publishing 输出后检测 AI 味表述，超阈值回退 fallback | ✅ | 发布稿质量兜底 |
+| 1.3 | 严重性乘数：本地质量门加入 Critical ×5.0/Major ×3.0 分级，替代不可行的并行化 | ✅ | 审计可信度分级更细粒度 |
 
 ## P2 — 功能深化（预计 3-5 天）
 

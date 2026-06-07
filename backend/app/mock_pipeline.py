@@ -65,6 +65,11 @@ def _build_strategy(ad: dict, material: dict) -> dict:
             "interest_hints": _infer_interests(industry, product),
             "platform_behavior_hints": _infer_platform_behavior(platform),
         },
+        "hook_pattern": {
+            "primary": _infer_hook_type(product),
+            "secondary": "",
+            "evidence_ids": ["E001"],
+        },
         "ad_objective": {
             "primary_goal": _infer_primary_goal(industry, price),
             "secondary_goal": "品牌心智渗透",

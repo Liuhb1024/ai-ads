@@ -30,6 +30,7 @@ frontend/out/
 .claude/
 .agents/
 .codex/
+.serena/
 
 # IDE
 .vscode/

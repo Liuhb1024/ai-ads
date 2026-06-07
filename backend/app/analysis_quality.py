@@ -154,16 +154,21 @@ def normalize_audit(
 
     contradictions = _string_list(source.get("contradictions"))
     limitations = _string_list(source.get("limitations"))
+
+    # Severity multipliers (inspired by claude-ads Critical ×5.0 system)
+    severity = _compute_severity(claims, unsupported_claim_ids, contradictions, limitations)
+
     if valid_ids:
         rejected_ratio = len(set(unsupported_claim_ids)) / len(valid_ids)
         local_trust_score = round(
             100
             - rejected_ratio * 45
-            - min(len(contradictions) * 6, 18)
-            - min(len(limitations) * 2, 12)
+            - min(len(contradictions) * 6 * severity["contradiction_multiplier"], 30)
+            - min(len(limitations) * 2 * severity["limitation_multiplier"], 10)
+            - severity["hard_penalty"]
         )
     else:
-        local_trust_score = 70 - min(len(unsupported) * 10, 50)
+        local_trust_score = 70 - min(len(unsupported) * 10 * severity["unsupported_multiplier"], 60)
     local_trust_score = max(0, min(100, local_trust_score))
 
     # The model supplies qualitative scrutiny; the deterministic score prevents
@@ -179,6 +184,9 @@ def normalize_audit(
     if unsupported:
         trust_score = min(trust_score, 69)
         verdict = "review" if verdict == "pass" else verdict
+    if severity["kill_trigger"]:
+        trust_score = min(trust_score, 39)
+        verdict = "reject"
 
     return {
         "trust_score": trust_score,
@@ -190,7 +198,77 @@ def normalize_audit(
         "approved_claim_ids": approved_claim_ids,
         "contradictions": contradictions,
         "limitations": limitations,
+        "severity": severity,
         "publication_guidance": str(source.get("publication_guidance") or "").strip(),
+    }
+
+
+def _compute_severity(
+    claims: list[dict[str, Any]],
+    unsupported_ids: set | list,
+    contradictions: list[str],
+    limitations: list[str],
+) -> dict[str, Any]:
+    """Compute severity multipliers, mirroring claude-ads' severity system.
+
+    Returns severity assessment with multipliers and kill triggers.
+    """
+    unsupported_set = {str(i) for i in unsupported_ids}
+    total = len(claims)
+    if total == 0:
+        return {
+            "level": "unknown",
+            "contradiction_multiplier": 1,
+            "limitation_multiplier": 1,
+            "unsupported_multiplier": 1,
+            "hard_penalty": 0,
+            "kill_trigger": False,
+        }
+
+    rejected = sum(1 for c in claims if str(c.get("claim_id", "")) in unsupported_set)
+    observed_count = sum(1 for c in claims if c.get("claim_type") == "observed")
+    hypothesis_count = sum(1 for c in claims if c.get("claim_type") == "hypothesis")
+    low_confidence = sum(1 for c in claims if c.get("confidence") == "low")
+    rejected_ratio = rejected / total if total > 0 else 0
+    evidence_weakness = (
+        (hypothesis_count + low_confidence * 2) / (total * 3)
+        if total > 0 else 0
+    )
+
+    multiplier = 1
+    hard_penalty = 0
+    kill_trigger = False
+
+    # Critical (×5.0): >50% rejected or >3 contradictions
+    if rejected_ratio > 0.5 or len(contradictions) > 3:
+        multiplier = 5
+        hard_penalty = 40
+        kill_trigger = True
+    # Major (×3.0): >30% rejected or >2 contradictions
+    elif rejected_ratio > 0.3 or len(contradictions) > 2:
+        multiplier = 3
+        hard_penalty = 20
+    # Moderate (×2.0): >15% rejected or evidence weakness > 0.3
+    elif rejected_ratio > 0.15 or evidence_weakness > 0.3:
+        multiplier = 2
+    # Minor (×1.0): default, no multiplier
+
+    level = (
+        "critical" if kill_trigger
+        else "major" if multiplier >= 3
+        else "moderate" if multiplier >= 2
+        else "minor"
+    )
+
+    return {
+        "level": level,
+        "contradiction_multiplier": multiplier,
+        "limitation_multiplier": multiplier,
+        "unsupported_multiplier": multiplier,
+        "hard_penalty": hard_penalty,
+        "kill_trigger": kill_trigger,
+        "rejected_ratio": round(rejected_ratio, 3),
+        "evidence_weakness": round(evidence_weakness, 3),
     }
 
 
