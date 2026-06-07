@@ -23,6 +23,14 @@ logger = logging.getLogger(__name__)
 _EXPORTS_DIR = Path(__file__).resolve().parent.parent.parent.parent / "exports"
 _EXPORTS_DIR.mkdir(parents=True, exist_ok=True)
 
+# Progress tracking for in-flight generation jobs
+_pipeline_progress: dict[str, dict] = {}
+
+
+def get_pipeline_progress(ad_id: str) -> dict | None:
+    """Return current pipeline progress for an ad_id, or None if not running."""
+    return _pipeline_progress.get(ad_id)
+
 STORYBOARD_SYSTEM = """你是一位专业的短视频内容策划师。你的任务是将广告分析结果转化为45秒横屏视频的分镜脚本。
 
 输出以下JSON格式（7个场景，总时长约45秒）：
@@ -76,31 +84,43 @@ async def run_video_pipeline(ad_record: dict, analysis: dict) -> dict[str, Any]:
 
     try:
         # Step 1: Generate storyboard
+        _pipeline_progress[ad_id] = {"stage": "storyboard", "message": "正在生成分镜脚本...", "percent": 5}
         logger.info(f"[video:{ad_id}] Step 1/4: Generating storyboard...")
         storyboard = await _generate_storyboard(analysis, ad_record)
         if "error" in storyboard:
+            _pipeline_progress.pop(ad_id, None)
             return {"status": "failed", "error": storyboard["error"], "video_path": ""}
+
+        _pipeline_progress[ad_id] = {"stage": "storyboard", "message": "分镜脚本已生成（7个场景）", "percent": 20}
 
         scenes = storyboard.get("scenes", [])
         if len(scenes) < 3:
-            # Fallback: generate a basic storyboard
             scenes = _fallback_storyboard(analysis, ad_record)
 
         # Step 2: Generate visual assets (parallel)
+        _pipeline_progress[ad_id] = {"stage": "visuals", "message": "正在生成视觉素材（AI插图 + 图表 + 文字卡片）...", "percent": 25}
         logger.info(f"[video:{ad_id}] Step 2/4: Generating visual assets...")
         images = await _generate_visuals(scenes, analysis, output_dir)
 
+        _pipeline_progress[ad_id] = {"stage": "visuals", "message": "视觉素材已生成", "percent": 45}
+
         # Step 3: Generate audio (parallel)
+        _pipeline_progress[ad_id] = {"stage": "audio", "message": "正在生成配音（Edge TTS 旁白 + Pixabay 背景音乐）...", "percent": 50}
         logger.info(f"[video:{ad_id}] Step 3/4: Generating audio...")
+        _pipeline_progress[ad_id] = {"stage": "audio", "message": "配音已生成", "percent": 65}
+
         scenes, bgm_path = await _generate_audio(scenes, output_dir)
 
         # Step 4: Render video
+        _pipeline_progress[ad_id] = {"stage": "render", "message": "正在合成视频（Ken Burns 效果 + 字幕 + 音轨混合）...", "percent": 75}
         logger.info(f"[video:{ad_id}] Step 4/4: Rendering video...")
         video_path = await _render_video(scenes, images, bgm_path, output_dir, ad_id)
 
+        _pipeline_progress.pop(ad_id, None)
         return {"video_path": video_path, "status": "completed", "error": None}
 
     except Exception as exc:
+        _pipeline_progress.pop(ad_id, None)
         logger.error(f"[video:{ad_id}] Pipeline failed: {exc}")
         return {"status": "failed", "error": str(exc), "video_path": ""}
 

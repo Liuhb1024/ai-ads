@@ -182,3 +182,6 @@ class VideoStatusResponse(BaseModel):
     status: str  # "generating" | "completed" | "failed" | ""
     video_url: str = ""
     error: Optional[str] = None
+    stage: str = ""  # "storyboard" | "visuals" | "audio" | "render"
+    progress_message: str = ""
+    percent: int = 0

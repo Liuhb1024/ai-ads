@@ -113,10 +113,12 @@ def _render_with_moviepy(
 
         # Attach audio
         audio_path = scene.get("audio_path", "")
-        if audio_path and os.path.exists(audio_path):
+        if audio_path and os.path.exists(audio_path) and os.path.getsize(audio_path) > 0:
             try:
+                from moviepy.audio.io.readers import FFMPEG_AudioReader
                 audio = AudioFileClip(audio_path)
-                clip = clip.with_audio(audio)
+                if audio.duration > 0:
+                    clip = clip.with_audio(audio)
             except Exception:
                 pass
 
@@ -126,20 +128,21 @@ def _render_with_moviepy(
     final = concatenate_videoclips(scene_clips)
 
     # Mix in background music
-    if bgm_path and os.path.exists(bgm_path):
+    if bgm_path and os.path.exists(bgm_path) and os.path.getsize(bgm_path) > 0:
         try:
             from moviepy.audio.fx import AudioLoop, MultiplyVolume
 
             bgm = AudioFileClip(bgm_path)
-            # Loop BGM if shorter than video, cut if longer
-            bgm = bgm.with_effects([AudioLoop(duration=final.duration)])
-            bgm = bgm.with_effects([MultiplyVolume(0.18)])
+            if bgm.duration > 0:
+                # Loop BGM if shorter than video, cut if longer
+                bgm = bgm.with_effects([AudioLoop(duration=final.duration)])
+                bgm = bgm.with_effects([MultiplyVolume(0.18)])
 
-            if final.audio:
-                final_audio = CompositeAudioClip([final.audio, bgm])
-            else:
-                final_audio = bgm
-            final = final.with_audio(final_audio)
+                if final.audio:
+                    final_audio = CompositeAudioClip([final.audio, bgm])
+                else:
+                    final_audio = bgm
+                final = final.with_audio(final_audio)
         except Exception:
             pass
 

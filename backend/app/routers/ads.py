@@ -174,6 +174,7 @@ async def get_job(ad_id: str, db=Depends(get_db)):
         "publishing": publishing,
         "error_message": record.get("error_message"),
         "failed_stage": record.get("failed_stage"),
+        "video_status": record.get("video_status", ""),
         "created_at": record["created_at"],
         "updated_at": record["updated_at"],
     }
@@ -625,6 +626,8 @@ async def generate_video(
 @router.get("/jobs/{ad_id}/video")
 async def get_video_status(ad_id: str, db=Depends(get_db)):
     """Check video generation status."""
+    from ..video_pipeline import get_pipeline_progress
+
     cursor = await db.execute("SELECT video_status, video_path FROM ads WHERE id = ?", (ad_id,))
     row = await cursor.fetchone()
     if not row:
@@ -632,16 +635,27 @@ async def get_video_status(ad_id: str, db=Depends(get_db)):
 
     status = row["video_status"] or ""
     video_url = f"/api/jobs/{ad_id}/video.mp4" if status == "completed" else ""
-    return {
+
+    result: dict = {
         "status": status,
         "video_url": video_url,
         "error": row["video_path"] if status == "failed" else None,
     }
 
+    if status == "generating":
+        progress = get_pipeline_progress(ad_id)
+        if progress:
+            result["stage"] = progress.get("stage", "")
+            result["progress_message"] = progress.get("message", "")
+            result["percent"] = progress.get("percent", 0)
+
+    return result
+
 
 @router.get("/jobs/{ad_id}/video.mp4")
 async def download_video(ad_id: str, db=Depends(get_db)):
     """Download the generated video file."""
+    import os
     from fastapi.responses import FileResponse
 
     cursor = await db.execute("SELECT video_status, video_path FROM ads WHERE id = ?", (ad_id,))

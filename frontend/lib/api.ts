@@ -217,6 +217,9 @@ export interface VideoStatusResponse {
   status: string;  // "" | "generating" | "completed" | "failed"
   video_url: string;
   error?: string | null;
+  stage?: string;          // "storyboard" | "visuals" | "audio" | "render"
+  progress_message?: string;
+  percent?: number;
 }
 
 export async function generateVideo(adId: string): Promise<{ status: string; video_url: string }> {
